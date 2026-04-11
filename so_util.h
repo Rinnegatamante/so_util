@@ -6,6 +6,12 @@
 
 #define MAX_DATA_SEG 4
 
+#define USE_KUBRIDGE // Comment out to use VM domain instead
+
+#ifndef USE_KUBRIDGE
+extern SceUID vm_blk;
+#endif
+
 /**
  * @brief Runtime state of a loaded Android shared library (.so).
  */
@@ -207,6 +213,7 @@ uintptr_t so_symbol(const so_module *mod, const char *symbol);
  * @param ...   Arguments to forward to the original function.
  * @return      The original function's return value, of type @p type.
  */
+#ifdef USE_KUBRIDGE
 #define SO_CONTINUE(type, h, ...) ({ \
 	sceClibMemcpy((void *)h.addr, h.orig_instr, sizeof(h.orig_instr)); \
 	kuKernelFlushCaches((void *)h.addr, sizeof(h.orig_instr)); \
@@ -215,5 +222,15 @@ uintptr_t so_symbol(const so_module *mod, const char *symbol);
 	kuKernelFlushCaches((void *)h.addr, sizeof(h.patch_instr)); \
 	r; \
 })
+#else
+#define SO_CONTINUE(type, h, ...) ({ \
+	sceClibMemcpy((void *)h.addr, h.orig_instr, sizeof(h.orig_instr)); \
+	sceKernelSyncVMDomain(vm_blk, (void *)h.addr, sizeof(h.orig_instr)); \
+	type r = h.thumb_addr ? ((type(*)())h.thumb_addr)(__VA_ARGS__) : ((type(*)())h.addr)(__VA_ARGS__); \
+	sceClibMemcpy((void *)h.addr, h.patch_instr, sizeof(h.patch_instr)); \
+	sceKernelSyncVMDomain(vm_blk, (void *)h.addr, sizeof(h.patch_instr)); \
+	r; \
+})
+#endif
 
 #endif // __SO_UTIL_H__

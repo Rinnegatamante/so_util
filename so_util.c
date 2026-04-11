@@ -12,10 +12,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <psp2/io/fcntl.h>
-#include <psp2/kernel/clib.h>
+#include <vitasdk.h>
 
+#ifdef USE_KUBRIDGE
 #include <kubridge.h>
+#else
+#define VM_BLK_SIZE (16 * 1024 * 1024)
+SceUID vm_blk;
+static void *vm_ptr = NULL;
+static int vm_domain_opened = 0;
+#endif
 
 // Uncomment for verbose logging:
 //#define SO_UTIL_VERBOSE 1
@@ -118,7 +124,11 @@ so_hook hook_addr(uintptr_t addr, uintptr_t dst) {
 
 void so_flush_caches(const so_module *mod) {
 	SO_UTIL_LOG_VERBOSE("Flushing cache on addr: %x size: %u\n", mod->text_base, mod->text_size);
+#ifdef USE_KUBRIDGE
 	kuKernelFlushCaches((void *)mod->text_base, mod->text_size);
+#else
+	sceClibPrintf("Flush %x\n", sceKernelSyncVMDomain(mod->text_blockid, (void *)mod->text_base, mod->text_size));
+#endif
 }
 
 /**
@@ -139,6 +149,20 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 		goto err_free_so;
 	}
 
+#ifndef USE_KUBRIDGE
+	// With VM Domain we can't choose the base address
+	vm_blk = sceKernelAllocMemBlockForVM("so_blk", VM_BLK_SIZE);
+	if (vm_blk < 0)
+		goto err_free_so;
+	sceKernelGetMemBlockBase(vm_blk, &vm_ptr);
+	load_addr = data_addr = (uintptr_t)vm_ptr + PATCH_SZ;
+	sceClibPrintf("so block allocated (0x%08x) on address: 0x%08x (text: 0x%08x)\n", vm_blk, vm_ptr, load_addr);
+	if (!vm_domain_opened) {
+		sceKernelOpenVMDomain();
+		vm_domain_opened = 1;
+	}
+#endif
+
 	mod->ehdr = (Elf32_Ehdr *)so_data;
 	mod->phdr = (Elf32_Phdr *)((uintptr_t)so_data + mod->ehdr->e_phoff);
 	mod->shdr = (Elf32_Shdr *)((uintptr_t)so_data + mod->ehdr->e_shoff);
@@ -157,6 +181,9 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 				// Allocate arena for code patches, trampolines, etc.
 				// Sits exactly under the desired allocation space
 				mod->patch_size = ALIGN_MEM(PATCH_SZ, mod->phdr[i].p_align);
+#ifndef USE_KUBRIDGE
+				mod->patch_base = load_addr - mod->patch_size;
+#else
 				SceKernelAllocMemBlockKernelOpt opt;
 				sceClibMemset(&opt, 0, sizeof(SceKernelAllocMemBlockKernelOpt));
 				opt.size = sizeof(SceKernelAllocMemBlockKernelOpt);
@@ -168,13 +195,17 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 
 				sceKernelGetMemBlockBase(mod->patch_blockid, (void **) &mod->patch_base);
 				kuKernelMemProtect((void *) mod->patch_base, mod->patch_size, KU_KERNEL_PROT_EXEC | KU_KERNEL_PROT_WRITE | KU_KERNEL_PROT_READ);
+#endif
 				mod->patch_head = mod->patch_base;
 				
 				prog_size = ALIGN_MEM(mod->phdr[i].p_memsz + mod->phdr[i].p_vaddr - (data_addr - load_addr), mod->phdr[i].p_align);
 				
 				mod->phdr[i].p_vaddr += (Elf32_Addr)load_addr;
 				SO_UTIL_LOG_VERBOSE("Text segment: vaddr: %x (data addr: %x) size: %u\n", mod->phdr[i].p_vaddr, data_addr, mod->phdr[i].p_memsz);
-
+#ifndef USE_KUBRIDGE
+				mod->text_blockid = vm_blk;
+				prog_data = (void *)data_addr;
+#else
 				sceClibMemset(&opt, 0, sizeof(SceKernelAllocMemBlockKernelOpt));
 				opt.size = sizeof(SceKernelAllocMemBlockKernelOpt);
 				opt.attr = 0x1;
@@ -185,6 +216,7 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 				
 				sceKernelGetMemBlockBase(mod->text_blockid, &prog_data);
 				kuKernelMemProtect(prog_data, prog_size, KU_KERNEL_PROT_EXEC | KU_KERNEL_PROT_WRITE | KU_KERNEL_PROT_READ);
+#endif
 				
 				mod->text_base = mod->phdr[i].p_vaddr;
 				mod->text_size = mod->phdr[i].p_memsz;
@@ -206,7 +238,10 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 				
 				mod->phdr[i].p_vaddr += load_addr;
 				SO_UTIL_LOG_VERBOSE("Data segment: vaddr: %x (data addr: %x) size: %u\n", mod->phdr[i].p_vaddr, data_addr, mod->phdr[i].p_memsz);
-				
+
+#ifndef USE_KUBRIDGE
+				prog_data = (void *)data_addr;
+#else					
 				SceKernelAllocMemBlockKernelOpt opt = {0};
 				opt.size = sizeof(SceKernelAllocMemBlockKernelOpt);
 				opt.attr = 0x1;
@@ -216,6 +251,7 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 					goto err_free_text;
 				
 				sceKernelGetMemBlockBase(mod->data_blockid[mod->n_data], &prog_data);
+#endif
 				data_addr = (uintptr_t)prog_data + prog_size;
 
 				mod->data_base[mod->n_data] = mod->phdr[i].p_vaddr;
@@ -280,11 +316,18 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 		tail = mod;
 	}
 
+#ifndef USE_KUBRIDGE
+	// Just in case...
+	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+#endif
+
 	return 0;
 
 err_free_data:
+#ifndef USE_KUBRIDGE
 	for (int i = 0; i < mod->n_data; i++)
 		sceKernelFreeMemBlock(mod->data_blockid[i]);
+#endif
 err_free_text:
 	sceKernelFreeMemBlock(mod->text_blockid);
 err_free_so:
@@ -361,6 +404,11 @@ int so_relocate(const so_module *mod) {
 			break;
 		}
 	}
+
+#ifndef USE_KUBRIDGE
+	// Just in case...
+	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+#endif
 
 	return 0;
 }
@@ -492,7 +540,10 @@ int so_resolve(const so_module *mod, const so_default_dynlib *default_dynlib, in
 			break;
 		}
 	}
-
+#ifndef USE_KUBRIDGE
+	// Just in case...
+	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+#endif
 	return 0;
 }
 
@@ -523,7 +574,10 @@ int so_resolve_with_dummy(const so_module *mod, const so_default_dynlib *default
 			break;
 		}
 	}
-
+#ifndef USE_KUBRIDGE
+	// Just in case...
+	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+#endif
 	return 0;
 }
 
@@ -532,6 +586,10 @@ void so_initialize(const so_module *mod) {
 		if (mod->init_array[i] && mod->init_array[i] != (void (*)(void))-1)
 			mod->init_array[i]();
 	}
+#ifndef USE_KUBRIDGE
+	// Just in case...
+	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+#endif
 }
 
 uint32_t so_hash(const uint8_t *name) {
