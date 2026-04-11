@@ -127,7 +127,7 @@ void so_flush_caches(const so_module *mod) {
 #ifdef USE_KUBRIDGE
 	kuKernelFlushCaches((void *)mod->text_base, mod->text_size);
 #else
-	sceKernelSyncVMDomain(mod->text_blockid, (void *)mod->text_base, mod->text_size);
+	sceKernelSyncVMDomain(vm_blk, (void *)mod->text_base, mod->text_size);
 #endif
 }
 
@@ -317,8 +317,6 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 	}
 
 #ifndef USE_KUBRIDGE
-	// Just in case...
-	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
 	vm_avail_addr = data_addr;
 	SO_UTIL_LOG_CRITICAL("so loaded correctly. %u bytes left for more so files.\n", VM_BLK_SIZE - (vm_avail_addr - (uintptr_t)vm_ptr));
 #endif
@@ -406,11 +404,6 @@ int so_relocate(const so_module *mod) {
 			break;
 		}
 	}
-
-#ifndef USE_KUBRIDGE
-	// Just in case...
-	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
-#endif
 
 	return 0;
 }
@@ -542,10 +535,7 @@ int so_resolve(const so_module *mod, const so_default_dynlib *default_dynlib, in
 			break;
 		}
 	}
-#ifndef USE_KUBRIDGE
-	// Just in case...
-	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
-#endif
+
 	return 0;
 }
 
@@ -576,10 +566,7 @@ int so_resolve_with_dummy(const so_module *mod, const so_default_dynlib *default
 			break;
 		}
 	}
-#ifndef USE_KUBRIDGE
-	// Just in case...
-	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
-#endif
+
 	return 0;
 }
 
@@ -588,10 +575,6 @@ void so_initialize(const so_module *mod) {
 		if (mod->init_array[i] && mod->init_array[i] != (void (*)(void))-1)
 			mod->init_array[i]();
 	}
-#ifndef USE_KUBRIDGE
-	// Just in case...
-	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
-#endif
 }
 
 uint32_t so_hash(const uint8_t *name) {
