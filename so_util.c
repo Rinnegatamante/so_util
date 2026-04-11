@@ -18,9 +18,9 @@
 #include <kubridge.h>
 #else
 #define VM_BLK_SIZE (16 * 1024 * 1024)
-SceUID vm_blk;
+SceUID vm_blk = 0;
 static void *vm_ptr = NULL;
-static int vm_domain_opened = 0;
+static uintptr_t vm_avail_addr = 0;
 #endif
 
 // Uncomment for verbose logging:
@@ -127,7 +127,7 @@ void so_flush_caches(const so_module *mod) {
 #ifdef USE_KUBRIDGE
 	kuKernelFlushCaches((void *)mod->text_base, mod->text_size);
 #else
-	sceClibPrintf("Flush %x\n", sceKernelSyncVMDomain(mod->text_blockid, (void *)mod->text_base, mod->text_size));
+	sceKernelSyncVMDomain(mod->text_blockid, (void *)mod->text_base, mod->text_size);
 #endif
 }
 
@@ -151,16 +151,16 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 
 #ifndef USE_KUBRIDGE
 	// With VM Domain we can't choose the base address
-	vm_blk = sceKernelAllocMemBlockForVM("so_blk", VM_BLK_SIZE);
-	if (vm_blk < 0)
-		goto err_free_so;
-	sceKernelGetMemBlockBase(vm_blk, &vm_ptr);
-	load_addr = data_addr = (uintptr_t)vm_ptr + PATCH_SZ;
-	sceClibPrintf("so block allocated (0x%08x) on address: 0x%08x (text: 0x%08x)\n", vm_blk, vm_ptr, load_addr);
-	if (!vm_domain_opened) {
+	if (!vm_blk) {
+		vm_blk = sceKernelAllocMemBlockForVM("so_blk", VM_BLK_SIZE);
+		if (vm_blk < 0)
+			goto err_free_so;
+		sceKernelGetMemBlockBase(vm_blk, &vm_ptr);
 		sceKernelOpenVMDomain();
-		vm_domain_opened = 1;
+		vm_avail_addr = (uintptr_t)vm_ptr;
 	}
+	load_addr = data_addr = (uintptr_t)vm_avail_addr + PATCH_SZ;
+	SO_UTIL_LOG_CRITICAL("so block allocated (0x%08x) on address: 0x%08x (text: 0x%08x)\n", vm_blk, vm_ptr, load_addr);
 #endif
 
 	mod->ehdr = (Elf32_Ehdr *)so_data;
@@ -319,6 +319,8 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 #ifndef USE_KUBRIDGE
 	// Just in case...
 	sceKernelSyncVMDomain(vm_blk, vm_ptr, VM_BLK_SIZE);
+	vm_avail_addr = data_addr;
+	SO_UTIL_LOG_CRITICAL("so loaded correctly. %u bytes left for more so files.\n", VM_BLK_SIZE - (vm_avail_addr - (uintptr_t)vm_ptr));
 #endif
 
 	return 0;
