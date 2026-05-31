@@ -291,6 +291,9 @@ static int so_load_internal(so_module *mod, SceUID so_blockid, void *so_data, ui
 			mod->num_init_array = (uint32_t)(sh_size / sizeof(void *));
 		} else if (strcmp(sh_name, ".hash") == 0) {
 			mod->hash = (void *)sh_addr;
+		} else if (strcmp(sh_name, ".plt") == 0) {
+			mod->plt_base = sh_addr;
+			mod->plt_size = sh_size;
 		}
 	}
 
@@ -778,6 +781,56 @@ uintptr_t so_symbol(const so_module *mod, const char *symbol) {
 		return (uint32_t) NULL;
 
 	return mod->load_addr + mod->dynsym[index].st_value;
+}
+
+uintptr_t so_trampoline_symbol(const so_module *mod, const char *symbol) {
+	uintptr_t got_slot = 0;
+	for (uint32_t i = 0; i < mod->num_relplt; i++) {
+		Elf32_Rel *rel = &mod->relplt[i];
+		Elf32_Sym *sym = &mod->dynsym[ELF32_R_SYM(rel->r_info)];
+
+		if ((ELF32_R_TYPE(rel->r_info) != R_ARM_JUMP_SLOT) || (sym->st_name == 0))
+			continue;
+		if (strcmp(mod->dynstr + sym->st_name, symbol) == 0) {
+			got_slot = mod->load_addr + rel->r_offset;
+			break;
+		}
+	}
+
+	if (!got_slot)
+		return 0;
+
+	uintptr_t plt_start = mod->plt_base;
+	uintptr_t plt_end   = (uintptr_t)(mod->plt_base + mod->plt_size);
+
+	for (uintptr_t a = plt_start; a + 12 <= plt_end; a += 4) {
+		uint32_t w0 = *(uint32_t *)a;
+		uint32_t w1 = *(uint32_t *)(a + 4);
+		uint32_t w2 = *(uint32_t *)(a + 8);
+
+		if ((w2 >> 12) != 0xe5bcf)  // LDR PC, [R12, #imm]
+			continue;
+
+		// Decode the three-part ADD/ADD/LDR address calculation
+		#define ARM_ROTIMM(w) ({ \
+			uint32_t _imm = (w) & 0xff; \
+			uint32_t _rot = ((w) >> 8) & 0xf; \
+			(_imm >> (_rot * 2)) | (_imm << (32 - _rot * 2)); \
+		})
+
+		// Reconstruct the LDR target of the given entry
+		uintptr_t PC = a + 8;
+		uintptr_t R12 = PC + ARM_ROTIMM(w0);
+		R12 += ARM_ROTIMM(w1);
+		uint32_t delta = w2 & 0xfff;
+		uintptr_t target = R12 + delta;
+
+		// Check if reconstructed LDR target matches the PLT symbol address
+		if (target == got_slot)
+			return a;
+	}
+
+	return 0;
 }
 
 void so_symbol_fix_ldmia(so_module *mod, const char *symbol) {

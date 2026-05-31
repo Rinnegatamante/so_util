@@ -20,9 +20,9 @@ typedef struct so_module {
 	struct so_module *next;
 
 	SceUID patch_blockid, text_blockid, data_blockid[MAX_DATA_SEG];
-	uintptr_t patch_base, patch_head, cave_base, cave_head, text_base;
+	uintptr_t patch_base, patch_head, cave_base, cave_head, text_base, plt_base;
 	uintptr_t load_addr, data_base[MAX_DATA_SEG];
-	size_t patch_size, cave_size, text_size, data_size[MAX_DATA_SEG];
+	size_t patch_size, cave_size, text_size, data_size[MAX_DATA_SEG], plt_size;
 	int n_data;
 
 	Elf32_Ehdr *ehdr;
@@ -218,6 +218,15 @@ void so_finalize(const so_module *mod);
  * @return        Absolute virtual address of the symbol, or 0 if not found.
  */
 uintptr_t so_symbol(const so_module *mod, const char *symbol);
+
+/**
+ * @brief Looks up a PLT trampoline symbol by name of the target symbol in a module.
+ *
+ * @param mod     Module to search.
+ * @param symbol  Name of the symbol to look up.
+ * @return        Absolute virtual address of the trampoline symbol, or 0 if not found.
+ */
+uintptr_t so_trampoline_symbol(const so_module *mod, const char *symbol);
 
 /**
  * @brief Calls the original (unhooked) function from within a hook handler.
