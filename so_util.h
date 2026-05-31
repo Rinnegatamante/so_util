@@ -7,6 +7,7 @@
 #define MAX_DATA_SEG 4
 
 #define USE_KUBRIDGE // Comment out to use VM domain instead
+#define HAVE_VITAGL // Comment out to disable automatic GL symbols resolution with vitaGL
 
 #ifndef USE_KUBRIDGE
 extern SceUID vm_blk;

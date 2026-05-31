@@ -14,6 +14,10 @@
 
 #include <vitasdk.h>
 
+#ifdef HAVE_VITAGL
+#include <vitaGL.h>
+#endif
+
 #ifdef USE_KUBRIDGE
 #include <kubridge.h>
 #else
@@ -517,6 +521,14 @@ int so_resolve(const so_module *mod, const so_default_dynlib *default_dynlib, in
 						}
 					}
 				}
+
+#ifdef HAVE_VITAGL
+				if (!resolved) {
+					*ptr = (uintptr_t)vglGetProcAddress(mod->dynstr + sym->st_name);
+					if (*ptr)
+						resolved = 1;
+				}	
+#endif
 
 				if (!resolved) {
 					if (type == R_ARM_JUMP_SLOT) {
