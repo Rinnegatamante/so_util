@@ -146,6 +146,16 @@ int so_mem_load(so_module *mod, const void *buffer, size_t so_size, uintptr_t lo
 int so_relocate(const so_module *mod);
 
 /**
+ * @brief NOP calls to given function addresses across the whole module.
+ *
+ * @param mod                  Module whose imports should be resolved.
+ * @param addresses            List of symbols point to function calls to NOP.
+ * @param addresses_num        Number of addresses passed with @p addresses
+ * @return                     The number of function calls successfully NOP-ed.
+ */
+int so_nop_calls(const so_module *mod, uintptr_t *addresses, int addresses_num);
+
+/**
  * @brief Resolves undefined dynamic symbols against a default library table.
  *
  * For each undefined symbol in @p mod's relocations:

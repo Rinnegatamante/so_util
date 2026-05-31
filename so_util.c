@@ -89,7 +89,7 @@ so_hook hook_thumb(uintptr_t addr, uintptr_t dst) {
 	h.thumb_addr = addr;
 	addr &= ~1;
 	if (addr & 2) {
-		*(uint16_t *)addr = 0xbf00; // nop
+		*(uint16_t *)addr = 0xbf00; // NOP
 		addr += 2;
 		SO_UTIL_LOG_VERBOSE("THUMB UNALIGNED\n");
 	}
@@ -490,6 +490,56 @@ __attribute__((naked)) void plt0_stub() {
 		"mov r0, r12\n"
 		"b reloc_err\n"
 	);
+}
+
+// FIXME: We assume we have a pure ARM binary. Proper THUMB support missing.
+int so_nop_calls(const so_module *mod, uintptr_t *addresses, int addresses_num) {
+	if (addresses_num == 0)
+		return 0;
+
+	// Remove THUMB bit, if set
+	for (int i = 0; i < addresses_num; i++) {
+		addresses[i] &= ~1;
+	}
+	
+	uintptr_t text_start = mod->text_base;
+	uintptr_t text_end   = mod->text_base + mod->text_size;
+	int count = 0;
+
+	for (uintptr_t a = text_start; a + 4 <= text_end; a += 4) {
+		uint32_t raw_instr = *(uint32_t *)a;
+		
+		int is_bl  = ((raw_instr & 0xFF000000) == 0xEB000000);
+		int is_blx = ((raw_instr & 0xFE000000) == 0xFA000000);
+
+		if (is_bl || is_blx) {
+			int32_t imm24 = (int32_t)(raw_instr & 0x00FFFFFF);
+			
+			// Negative offset support
+			if (imm24 & (1 << 23)) {
+				imm24 |= ~((1 << 24) - 1);
+			}
+			
+			uintptr_t dest;
+			if (is_bl) {
+				dest = (uintptr_t)((intptr_t)(a + 8) + (imm24 * 4)); // PC + 8
+			} else { 
+				int H = (raw_instr >> 24) & 1;
+				dest = (uintptr_t)((intptr_t)(a + 8) + (imm24 * 4) + (H * 2));
+			}
+			
+			dest &= ~1;
+			for (int i = 0; i < addresses_num; i++) {
+				if (addresses[i] == dest) {
+					*(uint32_t *)a = 0xE1A00000; // NOP
+					count++;
+					break;
+				}
+			}
+		}
+	}
+
+	return count;
 }
 
 int so_resolve(const so_module *mod, const so_default_dynlib *default_dynlib, int size_default_dynlib, int default_dynlib_only) {
