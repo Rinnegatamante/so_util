@@ -194,6 +194,13 @@ void so_symbol_fix_ldmia(so_module *mod, const char *symbol);
 void so_initialize(const so_module *mod);
 
 /**
+ * @brief Frees allocated memory blocks for a given module.
+ *
+ * @param mod  Module to finalize.
+ */
+void so_finalize(const so_module *mod);
+
+/**
  * @brief Looks up an exported dynamic symbol by name in a module.
  *
  * @param mod     Module to search.

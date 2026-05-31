@@ -377,6 +377,12 @@ int so_file_load(so_module *mod, const char *filename, uintptr_t load_addr) {
 	return so_load_internal(mod, so_blockid, so_data, load_addr);
 }
 
+void so_finalize(const so_module *mod) {
+	for (int i = 0; i < mod->n_data; i++)
+		sceKernelFreeMemBlock(mod->data_blockid[i]);
+	sceKernelFreeMemBlock(mod->text_blockid);
+}
+
 int so_relocate(const so_module *mod) {
 	for (uint32_t i = 0; i < mod->num_reldyn + mod->num_relplt; i++) {
 		Elf32_Rel *rel = i < mod->num_reldyn ? &mod->reldyn[i] : &mod->relplt[i - mod->num_reldyn];
